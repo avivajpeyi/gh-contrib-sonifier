@@ -8,9 +8,10 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Heatmap } from "./components/Heatmap.js";
 import { Transport } from "./components/Transport.js";
-import { fetchContributionResponse } from "./lib/api.js";
+import { fetchContributionResponse, resolvedApiBaseUrl } from "./lib/api.js";
 
 const DEFAULT_USERNAME = "octocat";
+const apiBaseUrl = resolvedApiBaseUrl();
 
 export default function App() {
   const playerRef = useRef<ContributionPlayer | null>(null);
@@ -44,6 +45,11 @@ export default function App() {
   }, [mutedRows]);
 
   useEffect(() => {
+    if (!apiBaseUrl) {
+      setError("Set VITE_API_BASE_URL to your deployed API origin. GitHub Pages cannot query GitHub GraphQL directly.");
+      return;
+    }
+
     void load(DEFAULT_USERNAME);
   }, []);
 
@@ -140,6 +146,11 @@ export default function App() {
         <p className="notice">
           GitHub Pages can host this frontend, but live username lookup must go through a separate API because a GitHub
           token cannot be safely embedded in static client code.
+        </p>
+        <p className="notice">
+          {apiBaseUrl
+            ? `API endpoint: ${apiBaseUrl}`
+            : "API endpoint not configured. Add VITE_API_BASE_URL in your GitHub Pages build configuration."}
         </p>
       </section>
 

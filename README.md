@@ -104,6 +104,8 @@ The frontend is configured for GitHub Pages via [`.github/workflows/deploy-web.y
 
 To point the frontend at a deployed API, set the repository variable `VITE_API_BASE_URL` in GitHub Actions or provide it during build.
 
+If `VITE_API_BASE_URL` is missing in a GitHub Pages deployment, the frontend now refuses to issue the request and shows a configuration error instead of accidentally fetching the Pages HTML shell.
+
 ### API
 
 `apps/api/src/index.ts` exposes `handleContributionsRequest(request, env)` so the logic can be adapted to a serverless runtime without rewriting the GitHub fetch or normalization flow.
