@@ -7,11 +7,11 @@
     "build": "vite build",
     "dev": "vite",
     "preview": "vite preview",
+    "predeploy": "pnpm build",
+    "deploy": "pnpm build && cd ../.. && git subtree push --prefix apps/web/dist origin gh-pages",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit"
   },
   "dependencies": {
-    "@github-contrib-sonifier/core": "workspace:*",
-    "@github-contrib-sonifier/web-audio": "workspace:*",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

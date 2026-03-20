@@ -1,130 +1,168 @@
-import {
-  buildContributionGrid,
-  sequenceContributionResponse,
-  type ContributionResponse
-} from "@github-contrib-sonifier/core";
-import { ContributionPlayer } from "@github-contrib-sonifier/web-audio";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { Heatmap } from "./components/Heatmap.js";
-import { Transport } from "./components/Transport.js";
-import { fetchContributionResponse, resolvedApiBaseUrl } from "./lib/api.js";
+import { fetchContributionSummary } from "./lib/contributions.js";
+import { getTone, type TonePolySynth, type ToneSequence } from "./lib/tone.js";
+import type { ContributionDay } from "./types.js";
 
 const DEFAULT_USERNAME = "octocat";
-const apiBaseUrl = resolvedApiBaseUrl();
+const MIN_FREQUENCY = 220;
+const MAX_FREQUENCY = 1200;
+
+function frequencyForContribution(count: number) {
+  return Math.min(MAX_FREQUENCY, MIN_FREQUENCY + (count * 20));
+}
 
 export default function App() {
-  const playerRef = useRef<ContributionPlayer | null>(null);
+  const sequenceRef = useRef<ToneSequence<ContributionDay> | null>(null);
+  const synthRef = useRef<TonePolySynth | null>(null);
   const [username, setUsername] = useState(DEFAULT_USERNAME);
-  const [submittedUsername, setSubmittedUsername] = useState(DEFAULT_USERNAME);
-  const [contributions, setContributions] = useState<ContributionResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [tempo, setTempo] = useState(112);
-  const [activeWeek, setActiveWeek] = useState<number | null>(null);
+  const [profileName, setProfileName] = useState(DEFAULT_USERNAME);
+  const [contributionData, setContributionData] = useState<ContributionDay[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [mutedRows, setMutedRows] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeDate, setActiveDate] = useState<string | null>(null);
+  const [totalContributions, setTotalContributions] = useState(0);
+
+  const sortedContributionData = useMemo(
+    () => [...contributionData].sort((left, right) => left.date.localeCompare(right.date)),
+    [contributionData]
+  );
 
   useEffect(() => {
-    const player = new ContributionPlayer({
-      onStepChange: (step) => setActiveWeek(step)
-    });
-    playerRef.current = player;
+    void handleLoad(DEFAULT_USERNAME);
 
     return () => {
-      player.dispose();
+      sequenceRef.current?.dispose();
+      sequenceRef.current = null;
+      synthRef.current?.dispose();
+      synthRef.current = null;
+      const tone = window.Tone;
+      tone?.Transport.stop();
+      tone?.Transport.cancel();
     };
   }, []);
 
-  useEffect(() => {
-    playerRef.current?.setTempo(tempo);
-  }, [tempo]);
-
-  useEffect(() => {
-    playerRef.current?.setMutedWeekdays(mutedRows);
-  }, [mutedRows]);
-
-  useEffect(() => {
-    if (!apiBaseUrl) {
-      setError("Set VITE_API_BASE_URL to your deployed API origin. GitHub Pages cannot query GitHub GraphQL directly.");
-      return;
-    }
-
-    void load(DEFAULT_USERNAME);
-  }, []);
-
-  async function load(nextUsername: string) {
+  async function handleLoad(nextUsername: string) {
     setLoading(true);
     setError(null);
     setIsPlaying(false);
-    playerRef.current?.stop();
+    setActiveDate(null);
+    stopPlayback();
 
     try {
-      const response = await fetchContributionResponse(nextUsername);
-      setContributions(response);
-      setSubmittedUsername(response.username);
-      playerRef.current?.load(sequenceContributionResponse(response));
-      playerRef.current?.setTempo(tempo);
-      playerRef.current?.setMutedWeekdays(mutedRows);
+      const summary = await fetchContributionSummary(nextUsername);
+      setProfileName(summary.username);
+      setContributionData(summary.contributionData);
+      setTotalContributions(summary.totalContributions);
     } catch (loadError) {
-      setContributions(null);
-      setError(loadError instanceof Error ? loadError.message : "Unable to load contributions.");
+      setContributionData([]);
+      setTotalContributions(0);
+      setError(loadError instanceof Error ? loadError.message : "Unable to load contributions right now.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await load(username.trim());
+  function stopPlayback() {
+    sequenceRef.current?.stop();
+    sequenceRef.current?.dispose();
+    sequenceRef.current = null;
+    const tone = window.Tone;
+    tone?.Transport.stop();
+    tone?.Transport.cancel();
   }
 
-  async function handleTogglePlay() {
-    const player = playerRef.current;
-    if (!player || !contributions) {
+  async function playSequence() {
+    if (sortedContributionData.length === 0) {
       return;
     }
 
-    if (player.isPlaying()) {
-      player.pause();
+    const Tone = getTone();
+    await Tone.start();
+
+    if (!synthRef.current) {
+      synthRef.current = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: "triangle" },
+        envelope: {
+          attack: 0.02,
+          decay: 0.12,
+          sustain: 0.2,
+          release: 0.4
+        }
+      }).toDestination();
+      synthRef.current.volume.value = -10;
+    }
+
+    stopPlayback();
+
+    Tone.Transport.bpm.value = 132;
+
+    const sequence = new Tone.Sequence(
+      (time, day) => {
+        setActiveDate(day.date);
+
+        if (day.contributionCount <= 0) {
+          return;
+        }
+
+        const frequency = frequencyForContribution(day.contributionCount);
+        const velocity = Math.min(1, 0.18 + (day.contributionCount / 12));
+        synthRef.current?.triggerAttackRelease(frequency, "8n", time, velocity);
+      },
+      sortedContributionData,
+      "16n"
+    );
+
+    sequence.loop = false;
+    sequence.start(0);
+    sequenceRef.current = sequence;
+
+    const loopDuration = Math.max(0.1, sortedContributionData.length * Tone.Time("16n").toSeconds());
+    Tone.Transport.scheduleOnce(() => {
       setIsPlaying(false);
+      setActiveDate(null);
+      stopPlayback();
+    }, `+${loopDuration}`);
+
+    Tone.Transport.start();
+    setIsPlaying(true);
+  }
+
+  async function handlePlayToggle() {
+    if (isPlaying) {
+      stopPlayback();
+      setIsPlaying(false);
+      setActiveDate(null);
       return;
     }
 
     try {
-      await player.play();
-      setIsPlaying(true);
+      await playSequence();
     } catch (playError) {
-      setError(playError instanceof Error ? playError.message : "Audio playback failed.");
+      setError(playError instanceof Error ? playError.message : "Audio playback could not start.");
       setIsPlaying(false);
     }
   }
 
-  function handleToggleRow(weekday: number) {
-    setMutedRows((current) => {
-      const next = new Set(current);
-      if (next.has(weekday)) {
-        next.delete(weekday);
-      } else {
-        next.add(weekday);
-      }
-      return next;
-    });
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await handleLoad(username);
   }
 
-  const columns = contributions ? buildContributionGrid(contributions) : [];
-
   return (
-    <main className="page">
-      <section className="hero-card">
+    <main className="app-shell">
+      <section className="hero-panel">
         <p className="eyebrow">GitHub Contrib Sonifier</p>
-        <h1>Turn a contribution calendar into a playable weekly score.</h1>
-        <p className="lede">
-          Enter a public GitHub username, inspect the last 365 days as a 53-week heatmap, then hear each weekday map to
-          its own voice.
+        <h1>Hear a GitHub contribution graph as a Tone.js sequence.</h1>
+        <p className="hero-copy">
+          Load any public GitHub username through a public proxy, inspect the heatmap, then press play to sweep across
+          each day and convert contribution counts into notes.
         </p>
-        <form className="lookup-form" onSubmit={handleSubmit}>
-          <label>
+
+        <form className="controls-row" onSubmit={handleSubmit}>
+          <label className="input-group">
             <span>GitHub username</span>
             <input
               value={username}
@@ -135,59 +173,65 @@ export default function App() {
               spellCheck={false}
             />
           </label>
-          <button type="submit" disabled={loading || username.trim().length === 0}>
-            {loading ? "Loading..." : "Load calendar"}
+
+          <button type="submit" className="primary-button" disabled={loading || username.trim().length === 0}>
+            {loading ? "Loading..." : "Load"}
+          </button>
+
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={contributionData.length === 0}
+            onClick={() => void handlePlayToggle()}
+          >
+            {isPlaying ? "Stop" : "Play"}
           </button>
         </form>
-        <div className="meta-strip">
-          <span>{submittedUsername ? `Showing @${submittedUsername}` : "No profile loaded"}</span>
-          <span>{contributions ? `${contributions.totalContributions.toLocaleString("en-US")} contributions` : " "}</span>
+
+        <div className="summary-strip">
+          <div>
+            <span className="summary-label">Profile</span>
+            <strong>@{profileName}</strong>
+          </div>
+          <div>
+            <span className="summary-label">Days loaded</span>
+            <strong>{contributionData.length.toLocaleString("en-US")}</strong>
+          </div>
+          <div>
+            <span className="summary-label">Total contributions</span>
+            <strong>{totalContributions.toLocaleString("en-US")}</strong>
+          </div>
         </div>
-        <p className="notice">
-          GitHub Pages can host this frontend, but live username lookup must go through a separate API because a GitHub
-          token cannot be safely embedded in static client code.
-        </p>
-        <p className="notice">
-          {apiBaseUrl
-            ? `API endpoint: ${apiBaseUrl}`
-            : "API endpoint not configured. Add VITE_API_BASE_URL in your GitHub Pages build configuration."}
+
+        <p className="hint-card">
+          Playback uses a user gesture to unlock the browser audio context, then maps each day&apos;s
+          <code> contributionCount </code>
+          to a note frequency.
         </p>
       </section>
 
-      <section className="content-grid">
-        <div className="panel">
-          <div className="panel-header">
-            <h2>Heatmap</h2>
-            <p>Weekly columns advance left to right. Playback highlights the currently playing week.</p>
+      <section className="content-panel">
+        <div className="section-heading">
+          <div>
+            <h2>Contribution heatmap</h2>
+            <p>Squares are colored directly from the public proxy response and the active note is highlighted during playback.</p>
           </div>
-          {error ? <div className="status error">{error}</div> : null}
-          {!error && contributions ? <Heatmap columns={columns} activeWeek={activeWeek} /> : null}
-          {!error && !contributions && !loading ? <div className="status">Load a username to begin.</div> : null}
+          <div className="legend">
+            <span><i className="legend-swatch level-none" />None</span>
+            <span><i className="legend-swatch level-first_quartile" />Low</span>
+            <span><i className="legend-swatch level-second_quartile" />Medium</span>
+            <span><i className="legend-swatch level-third_quartile" />High</span>
+            <span><i className="legend-swatch level-fourth_quartile" />Peak</span>
+          </div>
         </div>
 
-        <div className="stack">
-          <Transport
-            disabled={!contributions}
-            isPlaying={isPlaying}
-            tempo={tempo}
-            mutedRows={mutedRows}
-            onTogglePlay={() => void handleTogglePlay()}
-            onTempoChange={setTempo}
-            onToggleRow={handleToggleRow}
-          />
-          <section className="panel details-card">
-            <div className="panel-header">
-              <h2>Mapping</h2>
-            </div>
-            <ul className="mapping-list">
-              <li>Sunday drives kick drum hits.</li>
-              <li>Monday becomes bass notes.</li>
-              <li>Tuesday through Friday feed pad voices.</li>
-              <li>Saturday layers hats with a lead tone.</li>
-              <li>Contribution intensity controls velocity and brightness.</li>
-            </ul>
-          </section>
-        </div>
+        {error ? <div className="status-card error">{error}</div> : null}
+        {!error && contributionData.length > 0 ? (
+          <Heatmap contributionData={contributionData} activeDate={activeDate} />
+        ) : null}
+        {!error && !loading && contributionData.length === 0 ? (
+          <div className="status-card">Load a GitHub username to render the heatmap.</div>
+        ) : null}
       </section>
     </main>
   );
