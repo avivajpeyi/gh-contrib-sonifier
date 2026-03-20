@@ -7,6 +7,7 @@
     "dev:web": "pnpm --filter @github-contrib-sonifier/web dev",
     "dev:api": "pnpm --filter @github-contrib-sonifier/api dev",
     "dev": "pnpm dev:web",
+    "deploy:web": "pnpm --filter @github-contrib-sonifier/web deploy",
     "test": "pnpm --filter @github-contrib-sonifier/core test",
     "typecheck": "pnpm -r typecheck"
   },
