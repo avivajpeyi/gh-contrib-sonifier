@@ -1,0 +1,19 @@
+{
+  "name": "github-contrib-sonifier",
+  "private": true,
+  "packageManager": "pnpm@10.6.2",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:web": "pnpm --filter @github-contrib-sonifier/web dev",
+    "dev:api": "pnpm --filter @github-contrib-sonifier/api dev",
+    "dev": "pnpm dev:web",
+    "test": "pnpm --filter @github-contrib-sonifier/core test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
